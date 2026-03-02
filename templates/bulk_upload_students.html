@@ -1,0 +1,38 @@
+{% extends "admin_base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h4>Bulk Upload Students (CSV)</h4>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <h6>CSV Format:</h6>
+                    <p>First row must be headers: <code>register_number,name,department,join_year</code></p>
+                    <p>Example:</p>
+                    <pre>
+register_number,name,department,join_year
+STM24CS001,John Doe,CS,2024
+STM24CS002,Jane Smith,CS,2024
+STM23ME001,Bob Wilson,ME,2023
+                    </pre>
+                    <p>Departments: CS, CE, ME, CD, EC</p>
+                    <p>Join Year: 2024 (1st yr), 2023 (2nd yr), 2022 (3rd yr), 2021 (4th yr)</p>
+                </div>
+                
+                <form method="POST" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label class="form-label">Select CSV File</label>
+                        <input type="file" name="csv_file" class="form-control" accept=".csv" required>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary">Upload</button>
+                    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">Cancel</a>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

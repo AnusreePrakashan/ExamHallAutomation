@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar navbar-dark bg-primary">
+        <div class="container">
+            <span class="navbar-brand">👨‍🎓 Student Dashboard</span>
+            <div class="text-white">
+                Welcome, {{ student_name }} | 
+                <a href="{{ url_for('logout') }}" class="text-white">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h5>My Seating Details</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if allocations %}
+                            <div class="table-responsive">
+                                <table class="table table-striped">
+                                    <thead>
+                                        <tr>
+                                            <th>Hall Name</th>
+                                            <th>Session</th>
+                                            <th>Time Slot</th>
+                                            <th>Seat Position</th>
+                                            <th>Department/Year</th>
+                                            <th>Invigilator</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for alloc in allocations %}
+                                        <tr>
+                                            <td>{{ alloc.hall_name }}</td>
+                                            <td>
+                                                <span class="badge bg-info">{{ alloc.session_type }}</span>
+                                            </td>
+                                            <td>{{ alloc.time_slot }}</td>
+                                            <td>
+                                                <strong>Row {{ alloc.row_number }}, Column {{ alloc.column_name }}</strong>
+                                            </td>
+                                            <td>{{ alloc.department }} - Year {{ alloc.year }}</td>
+                                            <td>{{ alloc.invigilator_name or 'Not Assigned' }}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            <div class="alert alert-warning">
+                                No seating allocation found. Please contact admin.
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <div class="card mt-3">
+                    <div class="card-header">Student Information</div>
+                    <div class="card-body">
+                        <p><strong>Name:</strong> {{ student_name }}</p>
+                        <p><strong>Register Number:</strong> {{ register_number }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

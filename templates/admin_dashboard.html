@@ -1,0 +1,86 @@
+{% extends "admin_base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Admin Dashboard</h2>
+    <span class="text-muted">Welcome, {{ session.username }}</span>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card card-stats">
+            <div class="card-body">
+                <h5 class="card-title">Total Students</h5>
+                <h2 class="card-text">{{ student_count }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card card-stats border-warning">
+            <div class="card-body">
+                <h5 class="card-title">Total Halls</h5>
+                <h2 class="card-text">{{ hall_count }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card card-stats border-success">
+            <div class="card-body">
+                <h5 class="card-title">Invigilators</h5>
+                <h2 class="card-text">{{ invigilator_count }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card card-stats border-info">
+            <div class="card-body">
+                <h5 class="card-title">Exam Sessions</h5>
+                <h2 class="card-text">{{ session_count }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between">
+                <h5>Recent Exam Sessions</h5>
+                <a href="{{ url_for('create_session') }}" class="btn btn-primary btn-sm">Create New</a>
+            </div>
+            <div class="card-body">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Session</th>
+                            <th>Department/Year</th>
+                            <th>Hall</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for session in recent_sessions %}
+                        <tr>
+                            <td>{{ session.id }}</td>
+                            <td>{{ session.session_type }} - {{ session.time_slot }}</td>
+                            <td>{{ session.department }} - Year {{ session.year }}</td>
+                            <td>{{ session.hall_name }}</td>
+                            <td>
+                                <form method="POST" action="{{ url_for('generate_seating', session_id=session.id) }}" style="display:inline;">
+                                    <button type="submit" class="btn btn-success btn-sm">Generate Seating</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center">No sessions found</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

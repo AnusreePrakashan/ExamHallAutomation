@@ -1,0 +1,46 @@
+{% extends "admin_base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h4>Add New Student</h4>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label">Register Number</label>
+                        <input type="text" name="register_number" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Full Name</label>
+                        <input type="text" name="name" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Department</label>
+                        <select name="department" class="form-select" required>
+                            <option value="CS">CS - Computer Science</option>
+                            <option value="CE">CE - Civil</option>
+                            <option value="ME">ME - Mechanical</option>
+                            <option value="CD">CD - Data Science</option>
+                            <option value="EC">EC - Electrical Communication</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Join Year</label>
+                        <select name="join_year" class="form-select" required>
+                            <option value="2024">2024 (1st Year)</option>
+                            <option value="2023">2023 (2nd Year)</option>
+                            <option value="2022">2022 (3rd Year)</option>
+                            <option value="2021">2021 (4th Year)</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Add Student</button>
+                    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">Cancel</a>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

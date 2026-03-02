@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between">
+        <h4>All Invigilators</h4>
+        <a href="{{ url_for('add_invigilator') }}" class="btn btn-primary btn-sm">Add New</a>
+    </div>
+    <div class="card-body">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Department</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for inv in invigilators %}
+                <tr>
+                    <td>{{ inv.id }}</td>
+                    <td>{{ inv.name }}</td>
+                    <td>{{ inv.department or 'N/A' }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="3" class="text-center">No invigilators found</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

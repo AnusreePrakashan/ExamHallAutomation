@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between">
+        <h4>All Exam Sessions</h4>
+        <a href="{{ url_for('create_session') }}" class="btn btn-primary btn-sm">Create New</a>
+    </div>
+    <div class="card-body">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Session</th>
+                    <th>Class</th>
+                    <th>Subject</th>
+                    <th>Hall</th>
+                    <th>Invigilator</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for session in sessions %}
+                <tr>
+                    <td>{{ session.id }}</td>
+                    <td>{{ session.session_type }}<br><small>{{ session.time_slot }}</small></td>
+                    <td>{{ session.department }} - Year {{ session.year }}</td>
+                    <td>{{ session.subject }}</td>
+                    <td>{{ session.hall_name }}</td>
+                    <td>{{ session.invigilator_name }}</td>
+                    <td>
+                        <a href="{{ url_for('generate_seating', session_id=session.id) }}" class="btn btn-warning btn-sm">Allocate</a>
+                        <a href="{{ url_for('view_allocation', session_id=session.id) }}" class="btn btn-info btn-sm">View</a>
+                        <a href="{{ url_for('report', session_id=session.id) }}" class="btn btn-secondary btn-sm">Report</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center">No sessions found</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

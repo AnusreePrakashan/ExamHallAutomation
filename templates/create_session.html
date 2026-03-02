@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h4>Create Exam Session</h4>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Session Type</label>
+                            <select name="session_type" class="form-select" required>
+                                <option value="FN">FN - 9:30 AM to 11:00 AM</option>
+                                <option value="AN">AN - 2:30 PM to 4:00 PM</option>
+                            </select>
+                        </div>
+                        
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Department</label>
+                            <select name="department" class="form-select" required>
+                                <option value="">Select</option>
+                                <option value="CS">CS - Computer Science</option>
+                                <option value="CE">CE - Civil</option>
+                                <option value="ME">ME - Mechanical</option>
+                                <option value="CD">CD - Data Science</option>
+                                <option value="EC">EC - Electrical Communication and Engineering</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Year</label>
+                            <select name="year" class="form-select" required>
+                                <option value="1">1st Year</option>
+                                <option value="2">2nd Year</option>
+                                <option value="3">3rd Year</option>
+                                <option value="4">4th Year</option>
+                            </select>
+                        </div>
+                        
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Hall</label>
+                            <select name="hall_id" class="form-select" required>
+                                <option value="">Select Hall</option>
+                                {% for hall in halls %}
+                                <option value="{{ hall.id }}">
+                                    {{ hall.hall_name }} ({{ hall.total_rows * 9 }} seats)
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Invigilator</label>
+                            <select name="invigilator_id" class="form-select" required>
+                                <option value="">Select Invigilator</option>
+                                {% for inv in invigilators %}
+                                <option value="{{ inv.id }}">{{ inv.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary">Create Session & Generate Seating</button>
+                    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Cancel</a>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

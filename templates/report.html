@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Exam Seating Report</h2>
+    <button onclick="window.print()" class="btn btn-primary">Print Report</button>
+</div>
+
+<div class="card mb-4 border-2">
+    <div class="card-header bg-dark text-white">
+        <h4 class="text-center mb-0">EXAMINATION SEATING ARRANGEMENT</h4>
+    </div>
+    <div class="card-body">
+        <table class="table table-borderless">
+            <tr>
+                <td width="20%"><strong>Hall Name:</strong></td>
+                <td width="30%">{{ hall_info.hall_name }}</td>
+                <td width="20%"><strong>Session:</strong></td>
+                <td width="30%">{{ hall_info.session_type }}</td>
+            </tr>
+            <tr>
+                <td><strong>Time Slot:</strong></td>
+                <td>{{ hall_info.time_slot }}</td>
+                <td><strong>Subject:</strong></td>
+                <td>{{ hall_info.subject }}</td>
+            </tr>
+            <tr>
+                <td><strong>Department:</strong></td>
+                <td>{{ hall_info.department }}</td>
+                <td><strong>Year:</strong></td>
+                <td>{{ hall_info.year }}</td>
+            </tr>
+            <tr>
+                <td><strong>Invigilator:</strong></td>
+                <td colspan="3"><strong>{{ hall_info.invigilator_name }}</strong></td>
+            </tr>
+        </table>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5>Seating Grid Visualization</h5>
+    </div>
+    <div class="card-body">
+        <table class="table table-bordered table-sm text-center">
+            <thead>
+                <tr>
+                    <th>Row / Col</th>
+                    {% for col in columns %}
+                    <th>{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in range(1, hall_info.total_rows + 1) %}
+                <tr>
+                    <td class="fw-bold">Row {{ row }}</td>
+                    {% for col in columns %}
+                    <td class="{% if grid[col][row] %}table-success{% endif %}">
+                        {% if grid[col][row] %}
+                            {{ grid[col][row].register_number }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5>Detailed Seating List</h5>
+    </div>
+    <div class="card-body">
+        <table class="table table-striped table-bordered">
+            <thead>
+                <tr>
+                    <th>Seat</th>
+                    <th>Register Number</th>
+                    <th>Student Name</th>
+                    <th>Department</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for seat in seat_list %}
+                <tr>
+                    <td>{{ seat.column_name }}{{ seat.row_number }}</td>
+                    <td>{{ seat.register_number }}</td>
+                    <td>{{ seat.student_name }}</td>
+                    <td>{{ seat.department }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="mt-4 text-center text-muted">
+    <small>Generated on {{ now() if now is defined else 'Today' }} | Exam Hall Seating Allocation System</small>
+</div>
+{% endblock %}

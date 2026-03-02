@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invigilator Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar navbar-dark bg-success">
+        <div class="container">
+            <span class="navbar-brand">👨‍🏫 Invigilator Dashboard</span>
+            <div class="text-white">
+                Welcome, {{ session.name }} | 
+                <a href="{{ url_for('logout') }}" class="text-white">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <!-- Availability Status -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header bg-warning">
+                        <h5>My Availability</h5>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Current Status:</strong> 
+                            <span class="badge bg-{{ 'success' if invigilator.availability == 'Available' else 'danger' }}">
+                                {{ invigilator.availability }}
+                            </span>
+                        </p>
+                        
+                        <form method="POST" action="{{ url_for('update_availability') }}">
+                            <div class="mb-3">
+                                <select name="availability" class="form-select">
+                                    <option value="Available" {{ 'selected' if invigilator.availability == 'Available' }}>Available</option>
+                                    <option value="Unavailable" {{ 'selected' if invigilator.availability == 'Unavailable' }}>Unavailable</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Update Status</button>
+                        </form>
+                    </div>
+                </div>
+                
+                <div class="card mt-3">
+                    <div class="card-header bg-info text-white">
+                        <h5>Workload Summary</h5>
+                    </div>
+                    <div class="card-body text-center">
+                        <h2>{{ workload_count }}</h2>
+                        <p class="text-muted">Total Duties Assigned</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Assigned Duties -->
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header bg-success text-white">
+                        <h5>My Assigned Duties</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if duties %}
+                            <div class="table-responsive">
+                                <table class="table table-striped">
+                                    <thead>
+                                        <tr>
+                                            <th>Hall</th>
+                                            <th>Session</th>
+                                            <th>Time</th>
+                                            <th>Class</th>
+                                            <th>Assigned Date</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for duty in duties %}
+                                        <tr>
+                                            <td>{{ duty.hall_name }}</td>
+                                            <td>
+                                                <span class="badge bg-info">{{ duty.session_type }}</span>
+                                            </td>
+                                            <td>{{ duty.time_slot }}</td>
+                                            <td>{{ duty.department }} Year {{ duty.year }}</td>
+                                            <td>{{ duty.assigned_date.strftime('%d-%m-%Y') }}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            <div class="alert alert-info">
+                                No duties assigned yet. Make sure your availability is set to "Available".
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

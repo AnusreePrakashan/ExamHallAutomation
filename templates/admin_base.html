@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Admin Panel{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .sidebar {
+            min-height: 100vh;
+            background-color: #2c3e50;
+        }
+        .sidebar .nav-link {
+            color: #fff;
+            padding: 15px 20px;
+            border-bottom: 1px solid #34495e;
+        }
+        .sidebar .nav-link:hover {
+            background-color: #34495e;
+        }
+        .main-content {
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-md-2 sidebar p-0">
+                <h4 class="text-white p-3 border-bottom">Admin Panel</h4>
+                <nav class="nav flex-column">
+                    <a class="nav-link" href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+                    <a class="nav-link" href="{{ url_for('add_student') }}">Add Student</a>
+                    <a class="nav-link" href="{{ url_for('bulk_upload_students') }}">Bulk Upload Students</a>
+                    <a class="nav-link" href="{{ url_for('view_students') }}">View Students</a>
+                    <a class="nav-link" href="{{ url_for('add_hall') }}">Add Hall</a>
+                    <a class="nav-link" href="{{ url_for('view_halls') }}">View Halls</a>
+                    <a class="nav-link" href="{{ url_for('add_invigilator') }}">Add Invigilator</a>
+                    <a class="nav-link" href="{{ url_for('view_invigilators') }}">View Invigilators</a>
+                    <a class="nav-link" href="{{ url_for('create_session') }}">Create Session</a>
+                    <a class="nav-link" href="{{ url_for('view_sessions') }}">View Sessions</a>
+                    <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+                </nav>
+            </div>
+            <div class="col-md-10 main-content">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }}">{{ message }}</div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+                {% block content %}{% endblock %}
+            </div>
+        </div>
+    </div>
+</body>
+</html>
