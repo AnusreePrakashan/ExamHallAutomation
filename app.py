@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 import pymysql
 import datetime
 from functools import wraps
@@ -375,6 +375,169 @@ def view_invigilators():
 
 # ==================== ADMIN SESSION MANAGEMENT ====================
 
+# AJAX endpoint to return student count for a given year (used by dynamic form)
+@app.route('/admin/student_count/<int:year>')
+@login_required('admin')
+def student_count_api(year):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) as count FROM students WHERE current_year = %s", (year,))
+    result = cursor.fetchone()
+    conn.close()
+    return jsonify({'year': year, 'count': result['count']})
+
+# New multi--hall session creation route
+@app.route('/admin/create_multi_hall_session', methods=['GET', 'POST'])
+@login_required('admin')
+def create_multi_hall_session():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM halls")
+    halls = cursor.fetchall()
+    conn.close()
+
+    if request.method == 'POST':
+        session_type = request.form['session_type']
+        session_date = request.form['session_date']
+        hall_ids = request.form.getlist('hall_ids')
+        years_selected = request.form.getlist('years')
+
+        # basic validations
+        if not hall_ids:
+            flash('Please select at least one hall', 'danger')
+            return redirect(url_for('create_multi_hall_session'))
+        if not years_selected:
+            flash('Please select at least one year', 'danger')
+            return redirect(url_for('create_multi_hall_session'))
+
+        hall_ids = [int(h) for h in hall_ids]
+        years = [int(y) for y in years_selected]
+
+        # calculate total seating capacity
+        conn = get_db()
+        cursor = conn.cursor()
+        format_ids = ','.join(['%s'] * len(hall_ids))
+        cursor.execute(f"SELECT SUM(total_rows * total_columns) as capacity FROM halls WHERE id IN ({format_ids})", tuple(hall_ids))
+        capacity = cursor.fetchone()['capacity'] or 0
+
+        # compute total students (unallocated) for chosen years
+        total_students = 0
+        time_slot = '9:30 AM - 11:00 AM' if session_type == 'FN' else '2:30 PM - 4:00 PM'
+        for y in years:
+            cursor.execute("""
+                SELECT COUNT(*) as cnt
+                FROM students s
+                WHERE s.current_year = %s
+                AND s.id NOT IN (
+                    SELECT a.student_id FROM allocations a
+                    JOIN exam_sessions es ON a.session_id = es.id
+                    WHERE es.session_date = %s AND es.time_slot = %s
+                )
+            """, (y, session_date, time_slot))
+            total_students += cursor.fetchone()['cnt']
+
+        if total_students > capacity:
+            flash(f"Warning: {total_students} students but only {capacity} seats ({total_students-capacity} overflow)", 'warning')
+
+        # create a session row for each hall and allocate sequentially
+        session_ids = []
+        years_csv = ','.join(str(y) for y in years)
+        for hid in hall_ids:
+            cursor.execute("""
+                INSERT INTO exam_sessions (session_type, time_slot, session_date, years, hall_id)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (session_type, time_slot, session_date, years_csv, hid))
+            session_ids.append(cursor.lastrowid)
+        conn.commit()
+
+        # allocation loop (resembles generate_seating logic but proceeds hall by hall)
+        total_allocated = 0
+        inv_messages = []
+        for sid, hid in zip(session_ids, hall_ids):
+            cursor.execute("SELECT total_rows FROM halls WHERE id=%s", (hid,))
+            hall = cursor.fetchone()
+            total_rows = hall['total_rows']
+            columns = ['A','B','C','D','E','F','G','H','I']
+
+            # selected_years set for easier membership tests
+            selected_years_set = set(years)
+            buffer_columns = {'B', 'E', 'H'}
+            selected_years_list = sorted(list(selected_years_set))
+            fallback_idx = 0
+
+            for col in columns:
+                if len(selected_years_set) < 4 and col in buffer_columns:
+                    continue
+
+                mapped_year = COLUMN_YEAR_MAP[col]
+                dept_pair = COLUMN_DEPT_PAIR[col]
+                dept1, dept2 = dept_pair
+                effective_year = None
+                pre_fetched_dept_groups = None
+
+                if mapped_year in selected_years_set:
+                    effective_year = mapped_year
+                else:
+                    # pick best candidate from the remaining years
+                    best_candidate = None
+                    best_score = -1
+                    best_groups = None
+                    for cand in selected_years_list:
+                        cand_groups = fetch_students_by_year_excluding(conn, cand, exclude_date=session_date, exclude_time_slot=time_slot)
+                        c1 = len(cand_groups.get(dept1, []))
+                        c2 = len(cand_groups.get(dept2, []))
+                        if c1 > 0 and c2 > 0:
+                            best_candidate = cand
+                            best_groups = cand_groups
+                            best_score = c1 + c2
+                            break
+                        if (c1 + c2) > best_score:
+                            best_candidate = cand
+                            best_groups = cand_groups
+                            best_score = (c1 + c2)
+                    if best_candidate and best_score > 0:
+                        effective_year = best_candidate
+                        pre_fetched_dept_groups = best_groups
+                    else:
+                        effective_year = selected_years_list[fallback_idx % len(selected_years_list)]
+                        fallback_idx += 1
+
+                if pre_fetched_dept_groups is not None:
+                    dept_groups = pre_fetched_dept_groups
+                else:
+                    dept_groups = fetch_students_by_year_excluding(conn, effective_year, exclude_date=session_date, exclude_time_slot=time_slot)
+
+                column_students = alternate_departments(dept_groups, dept_pair, total_rows)
+                for row_idx, student in enumerate(column_students, start=1):
+                    cursor.execute("""
+                        INSERT INTO allocations 
+                        (student_id, session_id, hall_id, `row_number`, `column_name`)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (student['id'], sid, hid, row_idx, col))
+                    total_allocated += 1
+            conn.commit()
+
+            # automatically assign an invigilator for this hall/session
+            invigilator, msg = assign_invigilator_auto(hid, sid)
+            if invigilator:
+                inv_messages.append(f"Hall {hid}: {msg}")
+            else:
+                inv_messages.append(f"Hall {hid}: {msg}")
+
+        conn.close()
+        unallocated = total_students - total_allocated
+        if unallocated > 0:
+            flash(f"{unallocated} students could not be allocated and will remain unassigned", 'warning')
+
+        # combine seating and invigilator messages
+        seat_msg = f"Seating generated for {total_allocated} students across {len(hall_ids)} halls"
+        if inv_messages:
+            seat_msg += "; " + " | ".join(inv_messages)
+        flash(seat_msg, 'success')
+        return redirect(url_for('admin_dashboard'))
+
+    return render_template('multi_hall_session.html', halls=halls)
+
 # @app.route('/admin/create_session', methods=['GET', 'POST'])
 # @login_required('admin')
 # def create_session():
@@ -407,6 +570,7 @@ def view_invigilators():
 @app.route('/admin/create_session', methods=['GET', 'POST'])
 @login_required('admin')
 def create_session():
+    # existing single-hall session creation (unchanged)
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM halls")
