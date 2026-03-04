@@ -44,8 +44,9 @@ CREATE TABLE exam_sessions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     session_type VARCHAR(10) NOT NULL,
     time_slot VARCHAR(50) NOT NULL,
-    department VARCHAR(10) NOT NULL,
-    year INT NOT NULL,
+    session_date DATE NOT NULL,
+    -- Store multiple selected years as comma-separated values, e.g. '1,2,3'
+    years VARCHAR(50) NOT NULL,
     hall_id INT NOT NULL,
     FOREIGN KEY (hall_id) REFERENCES halls(id)
 );

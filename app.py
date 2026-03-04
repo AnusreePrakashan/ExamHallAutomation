@@ -27,9 +27,12 @@ COLUMN_YEAR_MAP = {
 
 # Column to Department Pair mapping
 COLUMN_DEPT_PAIR = {
-    'A': ['CS', 'CE'], 'B': ['ME', 'EC'], 'C': ['CS', 'ME'],
+    # Updated pairs so selected columns alternate between two departments
+    # A: alternate CE <-> CS, C: alternate ME <-> CS,
+    # E: alternate CD <-> CS, H: alternate CE <-> CS
+    'A': ['CE', 'CS'], 'B': ['ME', 'EC'], 'C': ['ME', 'CS'],
     'D': ['CE', 'EC'], 'E': ['CD', 'CS'], 'F': ['CE', 'ME'],
-    'G': ['EC', 'CD'], 'H': ['CS', 'CE'], 'I': ['ME', 'CD']
+    'G': ['EC', 'CE'], 'H': ['CE', 'CS'], 'I': ['ME', 'CD']
 }
 
 # ==================== LOGIN DECORATORS ====================
@@ -142,6 +145,11 @@ def add_student():
 import csv
 import io
 
+# ==================== VIEW ROUTES ====================
+
+
+
+
 @app.route('/admin/bulk_upload_students', methods=['GET', 'POST'])
 @login_required('admin')
 def bulk_upload_students():
@@ -160,23 +168,28 @@ def bulk_upload_students():
             flash('Please upload a CSV file', 'danger')
             return redirect(url_for('bulk_upload_students'))
         
-        # Read CSV with proper encoding handling
+        # Read CSV
         try:
-            # Try UTF-8 first
             stream = io.StringIO(file.stream.read().decode("utf-8-sig"), newline=None)
         except:
-            # Fallback to latin-1
             stream = io.StringIO(file.stream.read().decode("latin-1"), newline=None)
         
-        csv_reader = csv.DictReader(stream)
+        # Try to detect if first row is header
+        sample = stream.read(500)
+        stream.seek(0)
         
-        # Debug: print headers
-        headers = csv_reader.fieldnames
-        print(f"CSV Headers: {headers}")
+        # Check if first row contains text headers or data
+        first_line = sample.split('\n')[0] if sample else ''
+        has_header = any(word in first_line.lower() for word in ['register', 'name', 'dept', 'year', 'number'])
         
-        # Normalize headers (remove BOM, spaces, lowercase)
-        if headers:
-            csv_reader.fieldnames = [h.strip().replace('\ufeff', '').lower() for h in headers]
+        if has_header:
+            csv_reader = csv.DictReader(stream)
+            # Normalize headers
+            if csv_reader.fieldnames:
+                csv_reader.fieldnames = [h.strip().replace('\ufeff', '').lower().replace(' ', '_') for h in csv_reader.fieldnames]
+        else:
+            # No header - use simple CSV reader with fixed positions
+            csv_reader = csv.reader(stream)
         
         conn = get_db()
         cursor = conn.cursor()
@@ -188,50 +201,99 @@ def bulk_upload_students():
         
         for row in csv_reader:
             row_num += 1
+            
             try:
-                # Debug: print row
-                print(f"Processing row {row_num}: {row}")
+                # Debug
+                print(f"Row {row_num}: {row}")
                 
-                # Get values with flexible key matching
-                reg_num = row.get('register_number', '').strip() or row.get('register number', '').strip()
-                name = row.get('name', '').strip()
-                dept = row.get('department', '').strip().upper() or row.get('dept', '').strip().upper()
-                join_year_str = row.get('join_year', '').strip() or row.get('join year', '').strip()
+                # Handle both formats
+                if isinstance(row, dict):
+                    # DictReader (with headers)
+                    reg_num = (row.get('register_number', '') or 
+                              row.get('reg_no', '') or 
+                              row.get('registernumber', '') or
+                              row.get('register', '')).strip()
+                    
+                    name = (row.get('name', '') or 
+                           row.get('student_name', '') or
+                           row.get('studentname', '')).strip()
+                    
+                    dept = (row.get('department', '') or 
+                           row.get('dept', '') or 
+                           row.get('branch', '')).strip().upper()
+                    
+                    join_year_str = (row.get('join_year', '') or 
+                                    row.get('joinyear', '') or 
+                                    row.get('year', '') or
+                                    row.get('batch', '')).strip()
+                else:
+                    # Simple reader (no headers) - assume order: reg_num, year, dept, name
+                    if len(row) < 4:
+                        continue
+                    
+                    reg_num = row[0].strip()
+                    join_year_str = row[1].strip()
+                    dept = row[2].strip().upper()
+                    name = row[3].strip()
                 
-                if not reg_num:
-                    raise ValueError("Register number is empty")
-                if not name:
-                    raise ValueError("Name is empty")
-                if not dept:
-                    raise ValueError("Department is empty")
-                if not join_year_str:
-                    raise ValueError("Join year is empty")
+                # Clean register number
+                reg_num = reg_num.replace('L', '').replace('l', '').replace('ECE', 'STM')
                 
-                join_year = int(join_year_str)
+                # Ensure starts with STM
+                if not reg_num.startswith('STM'):
+                    # Try to extract and rebuild
+                    if len(reg_num) >= 8 and reg_num[2:4].isdigit():
+                        year = reg_num[2:4]
+                        dept_code = reg_num[4:6] if len(reg_num) >= 6 else dept[:2]
+                        roll = reg_num[-3:] if len(reg_num) >= 3 else '001'
+                        reg_num = f"STM{year}{dept_code}{roll}"
+                    else:
+                        reg_num = 'STM' + reg_num
+                
+                # Convert batch format
+                if join_year_str.startswith('2K') or join_year_str.startswith('2k'):
+                    join_year = 2000 + int(join_year_str[2:])
+                elif len(join_year_str) == 2:
+                    join_year = 2000 + int(join_year_str)
+                else:
+                    join_year = int(join_year_str)
+                
                 current_year = calculate_current_year(join_year)
                 
+                # Validate
+                if not reg_num or not name or not dept or not join_year:
+                    raise ValueError("Missing required fields")
+                
+                # Check duplicate
+                cursor.execute("SELECT id FROM students WHERE register_number = %s", (reg_num,))
+                if cursor.fetchone():
+                    raise ValueError(f"{reg_num} already exists")
+                
                 cursor.execute("""
-                    INSERT INTO students (register_number, name, department, join_year, current_year)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (reg_num, name, dept, join_year, current_year))
+                    INSERT INTO students (register_number, name, department, join_year, current_year, password)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (reg_num, name, dept, join_year, current_year, 'student123'))
+                
                 success_count += 1
                 
             except Exception as e:
                 error_count += 1
-                reg = row.get('register_number', 'Row ' + str(row_num))
-                errors.append(f"{reg}: {str(e)}")
+                errors.append(f"Row {row_num}: {str(e)}")
         
         conn.commit()
         conn.close()
         
-        flash(f'Uploaded {success_count} students successfully. {error_count} errors.', 
-              'success' if error_count == 0 else 'warning')
-        
-        if errors:
-            for error in errors[:10]:
+        if success_count > 0:
+            flash(f'Uploaded {success_count} students!', 'success')
+        if error_count > 0:
+            flash(f'{error_count} errors', 'warning')
+            for error in errors[:5]:
                 flash(error, 'danger')
+        
+        return redirect(url_for('view_students'))
     
     return render_template('bulk_upload_students.html')
+    
 @app.route('/admin/view_students')
 @login_required('admin')
 def view_students():
@@ -313,6 +375,35 @@ def view_invigilators():
 
 # ==================== ADMIN SESSION MANAGEMENT ====================
 
+# @app.route('/admin/create_session', methods=['GET', 'POST'])
+# @login_required('admin')
+# def create_session():
+#     conn = get_db()
+#     cursor = conn.cursor()
+#     cursor.execute("SELECT * FROM halls")
+#     halls = cursor.fetchall()
+#     conn.close()
+    
+#     if request.method == 'POST':
+#         session_type = request.form['session_type']
+#         dept = request.form['department']
+#         year = int(request.form['year'])
+#         hall_id = int(request.form['hall_id'])
+#         time_slot = '9:30 AM - 11:00 AM' if session_type == 'FN' else '2:30 PM - 4:00 PM'
+        
+#         conn = get_db()
+#         cursor = conn.cursor()
+#         cursor.execute("""
+#             INSERT INTO exam_sessions (session_type, time_slot, department, year, hall_id)
+#             VALUES (%s, %s, %s, %s, %s)
+#         """, (session_type, time_slot, dept, year, hall_id))
+#         conn.commit()
+#         session_id = cursor.lastrowid
+#         conn.close()
+#         flash('Session created!', 'success')
+#         return redirect(url_for('admin_dashboard'))
+    
+#     return render_template('create_session.html', halls=halls)
 @app.route('/admin/create_session', methods=['GET', 'POST'])
 @login_required('admin')
 def create_session():
@@ -320,28 +411,38 @@ def create_session():
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM halls")
     halls = cursor.fetchall()
-    conn.close()
-    
+
     if request.method == 'POST':
         session_type = request.form['session_type']
-        dept = request.form['department']
-        year = int(request.form['year'])
         hall_id = int(request.form['hall_id'])
+        session_date = request.form['session_date']
+        years_selected = request.form.getlist('years')
+
+        if not years_selected:
+            flash('Please select at least one year', 'danger')
+            conn.close()
+            return redirect(url_for('create_session'))
+
+        years_csv = ','.join(years_selected)
+
         time_slot = '9:30 AM - 11:00 AM' if session_type == 'FN' else '2:30 PM - 4:00 PM'
-        
-        conn = get_db()
-        cursor = conn.cursor()
+
+        # Insert session with date and selected years
         cursor.execute("""
-            INSERT INTO exam_sessions (session_type, time_slot, department, year, hall_id)
+            INSERT INTO exam_sessions (session_type, time_slot, session_date, years, hall_id)
             VALUES (%s, %s, %s, %s, %s)
-        """, (session_type, time_slot, dept, year, hall_id))
+        """, (session_type, time_slot, session_date, years_csv, hall_id))
+
         conn.commit()
         session_id = cursor.lastrowid
         conn.close()
-        flash('Session created!', 'success')
-        return redirect(url_for('admin_dashboard'))
-    
+
+        # Redirect to seating generation for this session
+        return redirect(url_for('generate_seating', session_id=session_id))
+
+    conn.close()
     return render_template('create_session.html', halls=halls)
+
 
 @app.route('/admin/view_sessions')
 @login_required('admin')
@@ -357,6 +458,153 @@ def view_sessions():
     sessions = cursor.fetchall()
     conn.close()
     return render_template('view_sessions.html', sessions=sessions)
+
+
+@app.route('/admin/view_allocation/<int:session_id>')
+@login_required('admin')
+def view_allocation(session_id):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Fetch session and hall info
+    cursor.execute("SELECT es.*, h.hall_name, h.total_rows, h.total_columns FROM exam_sessions es JOIN halls h ON es.hall_id = h.id WHERE es.id = %s", (session_id,))
+    es = cursor.fetchone()
+    if not es:
+        conn.close()
+        flash('Session not found', 'danger')
+        return redirect(url_for('view_sessions'))
+
+    hall_id = es['hall_id']
+    total_rows = es.get('total_rows') or es.get('total_rows', 0)
+    try:
+        total_rows = int(es['total_rows'])
+    except Exception:
+        total_rows = 0
+
+    # Fetch invigilator assigned (if any)
+    cursor.execute("""
+        SELECT i.name as invigilator_name
+        FROM allocated_invigilator ai
+        JOIN invigilators i ON ai.invigilator_id = i.id
+        WHERE ai.session_id = %s AND ai.hall_id = %s
+        LIMIT 1
+    """, (session_id, hall_id))
+    inv = cursor.fetchone()
+    inv_name = inv['invigilator_name'] if inv else 'N/A'
+
+    # Prepare hall_info for template
+    hall_info = {
+        'hall_name': es.get('hall_name', 'N/A'),
+        'session_type': es.get('session_type', ''),
+        'time_slot': es.get('time_slot', ''),
+        'subject': es.get('subject', 'N/A'),
+        'invigilator_name': inv_name,
+        'department': es.get('department', 'All'),
+        'year': es.get('year', 'All'),
+        'total_rows': total_rows
+    }
+
+    # Initialize grid A-I x rows
+    columns = ['A','B','C','D','E','F','G','H','I']
+    grid = {col: {r: None for r in range(1, hall_info['total_rows'] + 1)} for col in columns}
+
+    # Fetch allocations and populate grid
+    cursor.execute("""
+        SELECT a.row_number, a.column_name, s.register_number, s.name, s.department
+        FROM allocations a
+        JOIN students s ON a.student_id = s.id
+        WHERE a.session_id = %s AND a.hall_id = %s
+    """, (session_id, hall_id))
+
+    rows = cursor.fetchall()
+    for r in rows:
+        col = r['column_name']
+        rownum = r['row_number']
+        if col in grid and rownum in grid[col]:
+            grid[col][rownum] = {
+                'register_number': r.get('register_number'),
+                'name': r.get('name'),
+                'department': r.get('department')
+            }
+
+    conn.close()
+    return render_template('view_allocation.html', session_id=session_id, hall_info=hall_info, grid=grid)
+
+
+@app.route('/admin/report/<int:session_id>')
+@login_required('admin')
+def report(session_id):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT es.*, h.hall_name, h.total_rows, h.total_columns FROM exam_sessions es JOIN halls h ON es.hall_id = h.id WHERE es.id = %s", (session_id,))
+    es = cursor.fetchone()
+    if not es:
+        conn.close()
+        flash('Session not found', 'danger')
+        return redirect(url_for('view_sessions'))
+
+    hall_id = es['hall_id']
+    try:
+        total_rows = int(es['total_rows'])
+    except Exception:
+        total_rows = 0
+
+    hall_info = {
+        'hall_name': es.get('hall_name', 'N/A'),
+        'session_type': es.get('session_type', ''),
+        'time_slot': es.get('time_slot', ''),
+        'subject': es.get('subject', 'N/A'),
+        'invigilator_name': 'N/A',
+        'department': es.get('department', 'All'),
+        'year': es.get('year', 'All'),
+        'total_rows': total_rows
+    }
+
+    # Get assigned invigilator if any
+    cursor.execute("""
+        SELECT i.name as invigilator_name
+        FROM allocated_invigilator ai
+        JOIN invigilators i ON ai.invigilator_id = i.id
+        WHERE ai.session_id = %s AND ai.hall_id = %s
+        LIMIT 1
+    """, (session_id, hall_id))
+    inv = cursor.fetchone()
+    if inv:
+        hall_info['invigilator_name'] = inv['invigilator_name']
+
+    columns = ['A','B','C','D','E','F','G','H','I']
+    grid = {col: {r: None for r in range(1, hall_info['total_rows'] + 1)} for col in columns}
+
+    cursor.execute("""
+        SELECT a.row_number, a.column_name, s.register_number, s.name, s.department
+        FROM allocations a
+        JOIN students s ON a.student_id = s.id
+        WHERE a.session_id = %s AND a.hall_id = %s
+    """, (session_id, hall_id))
+    rows = cursor.fetchall()
+
+    seat_list = []
+    for r in rows:
+        col = r['column_name']
+        rownum = r['row_number']
+        if col in grid and rownum in grid[col]:
+            grid[col][rownum] = {
+                'register_number': r.get('register_number'),
+                'name': r.get('name'),
+                'department': r.get('department')
+            }
+
+        seat_list.append({
+            'column_name': col,
+            'row_number': rownum,
+            'register_number': r.get('register_number'),
+            'student_name': r.get('name'),
+            'department': r.get('department')
+        })
+
+    conn.close()
+    return render_template('report.html', hall_info=hall_info, grid=grid, columns=columns, seat_list=seat_list)
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -398,6 +646,39 @@ def fetch_students_by_year(conn, year):
     
     return dept_groups
 
+def fetch_students_by_year_excluding(conn, year, exclude_date=None, exclude_time_slot=None):
+    """Fetch students for a specific year grouped by department, excluding those already allocated on a given date/time"""
+    cursor = conn.cursor()
+    if exclude_date and exclude_time_slot:
+        cursor.execute("""
+            SELECT * FROM students s
+            WHERE s.current_year = %s
+            AND s.id NOT IN (
+                SELECT a.student_id FROM allocations a
+                JOIN exam_sessions es ON a.session_id = es.id
+                WHERE es.session_date = %s AND es.time_slot = %s
+            )
+            ORDER BY s.department, s.register_number
+        """, (year, exclude_date, exclude_time_slot))
+    else:
+        cursor.execute("""
+            SELECT * FROM students 
+            WHERE current_year = %s 
+            ORDER BY department, register_number
+        """, (year,))
+
+    students = cursor.fetchall()
+    cursor.close()
+
+    dept_groups = {}
+    for student in students:
+        dept = student['department']
+        if dept not in dept_groups:
+            dept_groups[dept] = []
+        dept_groups[dept].append(student)
+
+    return dept_groups
+
 def alternate_departments(dept_groups, dept_pair, total_seats):
     """Alternate between two departments in round-robin fashion"""
     dept1, dept2 = dept_pair
@@ -433,18 +714,31 @@ def get_least_workload_invigilator():
     """Fetch available invigilator with least workload"""
     conn = get_db()
     cursor = conn.cursor()
-    
+    # Treat NULL or differently-cased values as available, using COALESCE and LOWER
     cursor.execute("""
         SELECT i.id, i.name, i.department, COUNT(ai.id) as workload
         FROM invigilators i
         LEFT JOIN allocated_invigilator ai ON i.id = ai.invigilator_id
-        WHERE i.availability = 'Available'
+        WHERE LOWER(COALESCE(i.availability, 'Available')) = 'available'
         GROUP BY i.id
         ORDER BY workload ASC, i.id ASC
         LIMIT 1
     """)
-    
+
     invigilator = cursor.fetchone()
+
+    # If none explicitly available, fall back to any invigilator with least workload
+    if not invigilator:
+        cursor.execute("""
+            SELECT i.id, i.name, i.department, COUNT(ai.id) as workload
+            FROM invigilators i
+            LEFT JOIN allocated_invigilator ai ON i.id = ai.invigilator_id
+            GROUP BY i.id
+            ORDER BY workload ASC, i.id ASC
+            LIMIT 1
+        """)
+        invigilator = cursor.fetchone()
+
     conn.close()
     return invigilator
 
@@ -465,6 +759,7 @@ def assign_invigilator_auto(hall_id, session_id):
         """, (invigilator['id'], hall_id, session_id))
         conn.commit()
         conn.close()
+        
         return invigilator, f"Assigned {invigilator['name']} (Workload: {invigilator['workload']})"
     except Exception as e:
         conn.rollback()
@@ -473,13 +768,13 @@ def assign_invigilator_auto(hall_id, session_id):
 
 # ==================== SEATING ALLOCATION ====================
 
-@app.route('/admin/generate_seating/<int:session_id>', methods=['POST'])
+@app.route('/admin/generate_seating/<int:session_id>',methods=['GET', 'POST'])
 @login_required('admin')
 def generate_seating(session_id):
     conn = get_db()
     cursor = conn.cursor()
     
-    # Get session details
+    # Get session details (include date and years)
     cursor.execute("SELECT * FROM exam_sessions WHERE id = %s", (session_id,))
     exam_session = cursor.fetchone()
     
@@ -500,14 +795,83 @@ def generate_seating(session_id):
     # Generate seating
     total_allocated = 0
     columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']
-    
+
+    # Parse selected years for this session
+    years_csv = exam_session.get('years') or ''
+    selected_years = set()
+    try:
+        selected_years = set(int(y) for y in years_csv.split(',') if y)
+    except Exception:
+        selected_years = set()
+
+    session_date = exam_session.get('session_date')
+    session_time_slot = exam_session.get('time_slot')
+
+    # If not all four years are included, reserve columns B, E and H as buffers
+    # For other columns whose mapped year is missing, fallback to selected years
+    buffer_columns = {'B', 'E', 'H'}
+    selected_years_list = sorted(list(selected_years)) if selected_years else []
+    fallback_idx = 0
+
     for col in columns:
-        year = COLUMN_YEAR_MAP[col]
+        # drop buffer columns when a year is missing to reduce malpractice risk
+        if len(selected_years) < 4 and col in buffer_columns:
+            continue
+
+        mapped_year = COLUMN_YEAR_MAP[col]
         dept_pair = COLUMN_DEPT_PAIR[col]
-        
-        dept_groups = fetch_students_by_year(conn, year)
+        dept1, dept2 = dept_pair
+
+        # Determine effective year to allocate into this column
+        effective_year = None
+        pre_fetched_dept_groups = None
+
+        if mapped_year in selected_years:
+            effective_year = mapped_year
+        else:
+            # If no years selected at all, nothing to do
+            if not selected_years_list:
+                continue
+
+            # Prefer a selected year where both departments have students
+            best_candidate = None
+            best_score = -1
+            best_groups = None
+
+            for cand in selected_years_list:
+                cand_groups = fetch_students_by_year_excluding(conn, cand, exclude_date=session_date, exclude_time_slot=session_time_slot)
+                c1 = len(cand_groups.get(dept1, []))
+                c2 = len(cand_groups.get(dept2, []))
+
+                # immediate preference if both departments present
+                if c1 > 0 and c2 > 0:
+                    best_candidate = cand
+                    best_groups = cand_groups
+                    best_score = c1 + c2
+                    break
+
+                # otherwise prefer the candidate with most relevant students
+                if (c1 + c2) > best_score:
+                    best_candidate = cand
+                    best_groups = cand_groups
+                    best_score = (c1 + c2)
+
+            if best_candidate and best_score > 0:
+                effective_year = best_candidate
+                pre_fetched_dept_groups = best_groups
+            else:
+                # fallback round-robin if none have students in these departments
+                effective_year = selected_years_list[fallback_idx % len(selected_years_list)]
+                fallback_idx += 1
+
+        # Fetch students for the effective year (reuse pre-fetched if available)
+        if pre_fetched_dept_groups is not None:
+            dept_groups = pre_fetched_dept_groups
+        else:
+            dept_groups = fetch_students_by_year_excluding(conn, effective_year, exclude_date=session_date, exclude_time_slot=session_time_slot)
+
         column_students = alternate_departments(dept_groups, dept_pair, total_rows)
-        
+
         for row_idx, student in enumerate(column_students, start=1):
             cursor.execute("""
                 INSERT INTO allocations 
@@ -515,17 +879,23 @@ def generate_seating(session_id):
                 VALUES (%s, %s, %s, %s, %s)
             """, (student['id'], session_id, hall_id, row_idx, col))
             total_allocated += 1
-    
+    # Commit seating inserts BEFORE assigning invigilator to avoid lock waits
+    conn.commit()
+
     # AUTOMATIC INVIGILATOR ASSIGNMENT
     invigilator, message = assign_invigilator_auto(hall_id, session_id)
-    
-    conn.commit()
+
     conn.close()
     
+    # inform about buffer columns if not all years were present
+    extra_note = ''
+    if len(selected_years) < 4:
+        extra_note = ' Columns B, E and H left empty due to missing year.'
+
     if invigilator:
-        flash(f'Seating generated for {total_allocated} students. {message}', 'success')
+        flash(f'Seating generated for {total_allocated} students. {message}{extra_note}', 'success')
     else:
-        flash(f'Seating generated but {message}', 'warning')
+        flash(f'Seating generated but {message}{extra_note}', 'warning')
     
     return redirect(url_for('admin_dashboard'))
 
@@ -563,9 +933,11 @@ def student_dashboard():
     
     # Get student's seating allocation
     cursor.execute("""
-        SELECT a.*, h.hall_name, es.session_type, es.time_slot, es.department, es.year,
+        SELECT a.*, h.hall_name, es.session_type, es.time_slot,
+               s.department, s.current_year AS year,
                ai.invigilator_id, i.name as invigilator_name
         FROM allocations a
+        JOIN students s ON a.student_id = s.id
         JOIN halls h ON a.hall_id = h.id
         JOIN exam_sessions es ON a.session_id = es.id
         LEFT JOIN allocated_invigilator ai ON es.id = ai.session_id AND h.id = ai.hall_id
@@ -617,7 +989,8 @@ def invigilator_dashboard():
     
     # Get assigned duties with workload count
     cursor.execute("""
-        SELECT ai.*, h.hall_name, es.session_type, es.time_slot, es.department, es.year
+        SELECT ai.*, h.hall_name, es.session_type, es.time_slot,
+               NULL AS department, NULL AS year
         FROM allocated_invigilator ai
         JOIN halls h ON ai.hall_id = h.id
         JOIN exam_sessions es ON ai.session_id = es.id

@@ -8,7 +8,7 @@
                 <h4>Create Exam Session</h4>
             </div>
             <div class="card-body">
-                <form method="POST">
+                <!--<form method="POST">
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Session Type</label>
@@ -66,8 +66,64 @@
                     </div>
                     
                     <button type="submit" class="btn btn-primary">Create Session & Generate Seating</button>
-                    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Cancel</a>
-                </form>
+                    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">Cancel</a>
+                </form>-->
+                <form method="POST">
+    <div class="row">
+        <div class="col-md-6 mb-3">
+            <label class="form-label">Session Type</label>
+            <select name="session_type" class="form-select" required>
+                <option value="FN">FN - 9:30 AM to 11:00 AM</option>
+                <option value="AN">AN - 2:30 PM to 4:00 PM</option>
+            </select>
+        </div>
+
+        <div class="col-md-6 mb-3">
+            <label class="form-label">Hall</label>
+            <select name="hall_id" class="form-select" required>
+                <option value="">Select Hall</option>
+                {% for hall in halls %}
+                <option value="{{ hall.id }}">
+                    {{ hall.hall_name }} ({{ hall.total_rows * hall.total_columns }} seats)
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div class="row mt-3">
+        <div class="col-md-6 mb-3">
+            <label class="form-label">Exam Date</label>
+            <input type="date" name="session_date" class="form-control" required>
+        </div>
+
+        <div class="col-md-6 mb-3">
+            <label class="form-label">Select Years (multiple)</label>
+            <div class="d-flex gap-3 align-items-center">
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="years" value="1" id="y1">
+                    <label class="form-check-label" for="y1">1</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="years" value="2" id="y2">
+                    <label class="form-check-label" for="y2">2</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="years" value="3" id="y3">
+                    <label class="form-check-label" for="y3">3</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="years" value="4" id="y4">
+                    <label class="form-check-label" for="y4">4</label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">
+        Generate Seating
+    </button>
+</form>
             </div>
         </div>
     </div>

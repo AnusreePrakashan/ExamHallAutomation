@@ -64,7 +64,7 @@
                         <tr>
                             <td>{{ session.id }}</td>
                             <td>{{ session.session_type }} - {{ session.time_slot }}</td>
-                            <td>{{ session.department }} - Year {{ session.year }}</td>
+                            <td>{{ session.session_date }} - Years: {{ session.years }}</td>
                             <td>{{ session.hall_name }}</td>
                             <td>
                                 <form method="POST" action="{{ url_for('generate_seating', session_id=session.id) }}" style="display:inline;">

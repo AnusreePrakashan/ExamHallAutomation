@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "admin_base.html" %}
 
 {% block content %}
 <div class="card">
@@ -10,21 +10,27 @@
         <table class="table table-striped">
             <thead>
                 <tr>
-                    <th>ID</th>
+                    <th>Staff ID</th>
                     <th>Name</th>
                     <th>Department</th>
+                    <th>Availability</th>
                 </tr>
             </thead>
             <tbody>
                 {% for inv in invigilators %}
                 <tr>
-                    <td>{{ inv.id }}</td>
+                    <td>{{ inv.staff_id }}</td>
                     <td>{{ inv.name }}</td>
                     <td>{{ inv.department or 'N/A' }}</td>
+                    <td>
+                        <span class="badge bg-{{ 'success' if inv.availability == 'Available' else 'danger' }}">
+                            {{ inv.availability }}
+                        </span>
+                    </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="3" class="text-center">No invigilators found</td>
+                    <td colspan="4" class="text-center">No invigilators found</td>
                 </tr>
                 {% endfor %}
             </tbody>

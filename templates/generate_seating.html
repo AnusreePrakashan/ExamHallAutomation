@@ -22,9 +22,8 @@
             <div class="card-body">
                 <h5>Session Details</h5>
                 <p><strong>Session:</strong> {{ session.session_type }} ({{ session.time_slot }})</p>
-                <p><strong>Class:</strong> {{ session.department }} - Year {{ session.year }}</p>
-                <p><strong>Subject:</strong> {{ session.subject }}</p>
-                <p><strong>Hall:</strong> {{ session.hall_name }} ({{ session.total_rows }} rows × 9 columns)</p>
+                <p><strong>Date:</strong> {{ session.session_date }} | <strong>Years:</strong> {{ session.years }}</p>
+                <p><strong>Hall:</strong> {{ session.hall_name }} ({{ session.total_rows }} rows × {{ session.total_columns }} columns)</p>
                 <p><strong>Invigilator:</strong> {{ session.invigilator_name }}</p>
                 
                 {% if has_allocation %}
