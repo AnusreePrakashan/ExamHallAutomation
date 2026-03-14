@@ -29,6 +29,9 @@
                             <button type="submit" class="btn btn-success btn-sm">Generate Seating</button>
                         </form>
                         <a href="{{ url_for('view_allocation', session_id=session.id) }}" class="btn btn-primary btn-sm ms-1">View Allocation</a>
+                        <form method="POST" action="{{ url_for('delete_session', session_id=session.id) }}" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this session?');">
+                            <button type="submit" class="btn btn-danger btn-sm ms-1">Delete</button>
+                        </form>
                     </td>
                 </tr>
                 {% else %}

@@ -19,21 +19,12 @@ DB_CONFIG = {
 def get_db():
     return pymysql.connect(**DB_CONFIG)
 
-# Column to Year mapping
-COLUMN_YEAR_MAP = {
-    'A': 1, 'B': 2, 'C': 3, 'D': 4,
-    'E': 1, 'F': 2, 'G': 3, 'H': 4, 'I': 1
-}
+# Hall columns are fixed A–I (9 columns)
+HALL_COLUMNS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']
 
-# Column to Department Pair mapping
-COLUMN_DEPT_PAIR = {
-    # Updated pairs so selected columns alternate between two departments
-    # A: alternate CE <-> CS, C: alternate ME <-> CS,
-    # E: alternate CD <-> CS, H: alternate CE <-> CS
-    'A': ['CE', 'CS'], 'B': ['ME', 'EC'], 'C': ['ME', 'CS'],
-    'D': ['CE', 'EC'], 'E': ['CD', 'CS'], 'F': ['CE', 'ME'],
-    'G': ['EC', 'CE'], 'H': ['CE', 'CS'], 'I': ['ME', 'CD']
-}
+# In the original implementation, columns were tied to specific years and department-pairs.
+# Per updated requirements, columns must NOT belong to specific years anymore.
+# Allocation is now primarily year-distribution driven (avoid same-year adjacency in the same row).
 
 # ==================== LOGIN DECORATORS ====================
 
@@ -386,10 +377,17 @@ def student_count_api(year):
     conn.close()
     return jsonify({'year': year, 'count': result['count']})
 
-# New multi--hall session creation route
+# New multi-hall session creation route
 @app.route('/admin/create_multi_hall_session', methods=['GET', 'POST'])
 @login_required('admin')
 def create_multi_hall_session():
+    """
+    Updated multi-hall allocation:
+    - Creates one exam_session per selected hall (same date/time/years).
+    - Distributes students across halls in order, filling each hall row-wise with
+      "no same-year adjacency in the same row" as much as possible.
+    - If the last hall is partially used, auto-select columns to skip (prefer B, E, H).
+    """
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM halls")
@@ -402,7 +400,6 @@ def create_multi_hall_session():
         hall_ids = request.form.getlist('hall_ids')
         years_selected = request.form.getlist('years')
 
-        # basic validations
         if not hall_ids:
             flash('Please select at least one hall', 'danger')
             return redirect(url_for('create_multi_hall_session'))
@@ -411,125 +408,105 @@ def create_multi_hall_session():
             return redirect(url_for('create_multi_hall_session'))
 
         hall_ids = [int(h) for h in hall_ids]
-        years = [int(y) for y in years_selected]
+        years = sorted({int(y) for y in years_selected})
 
-        # calculate total seating capacity
+        time_slot = '9:30 AM - 11:00 AM' if session_type == 'FN' else '2:30 PM - 4:00 PM'
+        years_csv = ','.join(str(y) for y in years)
+
         conn = get_db()
         cursor = conn.cursor()
+
+        # calculate total seating capacity
         format_ids = ','.join(['%s'] * len(hall_ids))
-        cursor.execute(f"SELECT SUM(total_rows * total_columns) as capacity FROM halls WHERE id IN ({format_ids})", tuple(hall_ids))
+        cursor.execute(
+            f"SELECT SUM(total_rows * total_columns) as capacity FROM halls WHERE id IN ({format_ids})",
+            tuple(hall_ids),
+        )
         capacity = cursor.fetchone()['capacity'] or 0
 
-        # compute total students (unallocated) for chosen years
-        total_students = 0
-        time_slot = '9:30 AM - 11:00 AM' if session_type == 'FN' else '2:30 PM - 4:00 PM'
-        for y in years:
-            cursor.execute("""
-                SELECT COUNT(*) as cnt
-                FROM students s
-                WHERE s.current_year = %s
-                AND s.id NOT IN (
-                    SELECT a.student_id FROM allocations a
-                    JOIN exam_sessions es ON a.session_id = es.id
-                    WHERE es.session_date = %s AND es.time_slot = %s
-                )
-            """, (y, session_date, time_slot))
-            total_students += cursor.fetchone()['cnt']
+        # load eligible students once (exclude those already seated for same date/time)
+        by_year = fetch_available_students_by_year(
+            conn,
+            years,
+            exclude_date=session_date,
+            exclude_time_slot=time_slot,
+            session_id=None,
+        )
+        total_students = sum(len(q) for q in by_year.values())
 
         if total_students > capacity:
-            flash(f"Warning: {total_students} students but only {capacity} seats ({total_students-capacity} overflow)", 'warning')
+            flash(
+                f"Warning: {total_students} students but only {capacity} seats ({total_students - capacity} overflow)",
+                'warning',
+            )
 
-        # create a session row for each hall and allocate sequentially
+        # create a session row for each hall
         session_ids = []
-        years_csv = ','.join(str(y) for y in years)
         for hid in hall_ids:
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO exam_sessions (session_type, time_slot, session_date, years, hall_id)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (session_type, time_slot, session_date, years_csv, hid))
+                """,
+                (session_type, time_slot, session_date, years_csv, hid),
+            )
             session_ids.append(cursor.lastrowid)
         conn.commit()
 
-        # allocation loop (resembles generate_seating logic but proceeds hall by hall)
         total_allocated = 0
         inv_messages = []
+
+        # allocate hall by hall using the same global queues so distribution is across halls
+        remaining = sum(len(q) for q in by_year.values())
         for sid, hid in zip(session_ids, hall_ids):
+            if remaining <= 0:
+                break
+
             cursor.execute("SELECT total_rows FROM halls WHERE id=%s", (hid,))
             hall = cursor.fetchone()
-            total_rows = hall['total_rows']
-            columns = ['A','B','C','D','E','F','G','H','I']
+            total_rows = int(hall['total_rows']) if hall else 0
 
-            # selected_years set for easier membership tests
-            selected_years_set = set(years)
-            buffer_columns = {'B', 'E', 'H'}
-            selected_years_list = sorted(list(selected_years_set))
-            fallback_idx = 0
+            columns_to_use = choose_columns_to_use(total_rows, remaining)
+            prev_year_in_row = {r: None for r in range(1, total_rows + 1)}
 
-            for col in columns:
-                if len(selected_years_set) < 4 and col in buffer_columns:
-                    continue
+            for r in range(1, total_rows + 1):
+                for c in columns_to_use:
+                    if remaining <= 0:
+                        break
 
-                mapped_year = COLUMN_YEAR_MAP[col]
-                dept_pair = COLUMN_DEPT_PAIR[col]
-                dept1, dept2 = dept_pair
-                effective_year = None
-                pre_fetched_dept_groups = None
+                    forbidden = prev_year_in_row[r]
+                    y = pick_year_for_seat(by_year, forbidden_year=forbidden)
+                    if y is None:
+                        break
 
-                if mapped_year in selected_years_set:
-                    effective_year = mapped_year
-                else:
-                    # pick best candidate from the remaining years
-                    best_candidate = None
-                    best_score = -1
-                    best_groups = None
-                    for cand in selected_years_list:
-                        cand_groups = fetch_students_by_year_excluding(conn, cand, exclude_date=session_date, exclude_time_slot=time_slot)
-                        c1 = len(cand_groups.get(dept1, []))
-                        c2 = len(cand_groups.get(dept2, []))
-                        if c1 > 0 and c2 > 0:
-                            best_candidate = cand
-                            best_groups = cand_groups
-                            best_score = c1 + c2
-                            break
-                        if (c1 + c2) > best_score:
-                            best_candidate = cand
-                            best_groups = cand_groups
-                            best_score = (c1 + c2)
-                    if best_candidate and best_score > 0:
-                        effective_year = best_candidate
-                        pre_fetched_dept_groups = best_groups
-                    else:
-                        effective_year = selected_years_list[fallback_idx % len(selected_years_list)]
-                        fallback_idx += 1
-
-                if pre_fetched_dept_groups is not None:
-                    dept_groups = pre_fetched_dept_groups
-                else:
-                    dept_groups = fetch_students_by_year_excluding(conn, effective_year, exclude_date=session_date, exclude_time_slot=time_slot)
-
-                column_students = alternate_departments(dept_groups, dept_pair, total_rows)
-                for row_idx, student in enumerate(column_students, start=1):
-                    cursor.execute("""
-                        INSERT INTO allocations 
+                    student = by_year[y].pop(0)
+                    cursor.execute(
+                        """
+                        INSERT INTO allocations
                         (student_id, session_id, hall_id, `row_number`, `column_name`)
                         VALUES (%s, %s, %s, %s, %s)
-                    """, (student['id'], sid, hid, row_idx, col))
+                        """,
+                        (student['id'], sid, hid, r, c),
+                    )
                     total_allocated += 1
+                    remaining -= 1
+                    prev_year_in_row[r] = y
+
+                if remaining <= 0:
+                    break
+
             conn.commit()
 
             # automatically assign an invigilator for this hall/session
             invigilator, msg = assign_invigilator_auto(hid, sid)
-            if invigilator:
-                inv_messages.append(f"Hall {hid}: {msg}")
-            else:
-                inv_messages.append(f"Hall {hid}: {msg}")
+            inv_messages.append(f"Hall {hid}: {msg}")
 
         conn.close()
+
         unallocated = total_students - total_allocated
         if unallocated > 0:
             flash(f"{unallocated} students could not be allocated and will remain unassigned", 'warning')
 
-        # combine seating and invigilator messages
         seat_msg = f"Seating generated for {total_allocated} students across {len(hall_ids)} halls"
         if inv_messages:
             seat_msg += "; " + " | ".join(inv_messages)
@@ -622,6 +599,25 @@ def view_sessions():
     sessions = cursor.fetchall()
     conn.close()
     return render_template('view_sessions.html', sessions=sessions)
+
+@app.route('/admin/delete_session/<int:session_id>', methods=['POST'])
+@login_required('admin')
+def delete_session(session_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        # Remove any seating allocations and invigilator allocations
+        cursor.execute("DELETE FROM allocations WHERE session_id = %s", (session_id,))
+        cursor.execute("DELETE FROM allocated_invigilator WHERE session_id = %s", (session_id,))
+        cursor.execute("DELETE FROM exam_sessions WHERE id = %s", (session_id,))
+        conn.commit()
+        flash('Session deleted successfully', 'success')
+    except Exception as e:
+        conn.rollback()
+        flash(f'Error deleting session: {str(e)}', 'danger')
+    finally:
+        conn.close()
+    return redirect(url_for('view_sessions'))
 
 
 @app.route('/admin/view_allocation/<int:session_id>')
@@ -790,25 +786,47 @@ def get_column_letter(idx):
     """Convert column index (0-8) to letter (A-I)"""
     return ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'][idx]
 
-def fetch_students_by_year(conn, year):
-    """Fetch all students for a specific year, grouped by department"""
+def fetch_available_students_by_year(conn, years, exclude_date=None, exclude_time_slot=None, session_id=None):
+    """
+    Fetch students grouped by current_year, excluding those already allocated for the same date/time.
+    Also optionally excludes students already allocated in the same session_id.
+    Returns: {year_int: [student_dict, ...]} ordered by register_number.
+    """
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM students 
-        WHERE current_year = %s 
-        ORDER BY department, register_number
-    """, (year,))
-    students = cursor.fetchall()
+    params = []
+    where = []
+    where.append("s.current_year IN (" + ",".join(["%s"] * len(years)) + ")")
+    params.extend(list(years))
+
+    if exclude_date and exclude_time_slot:
+        where.append("""
+            s.id NOT IN (
+                SELECT a.student_id
+                FROM allocations a
+                JOIN exam_sessions es ON a.session_id = es.id
+                WHERE es.session_date = %s AND es.time_slot = %s
+            )
+        """)
+        params.extend([exclude_date, exclude_time_slot])
+
+    if session_id is not None:
+        where.append("s.id NOT IN (SELECT student_id FROM allocations WHERE session_id = %s)")
+        params.append(session_id)
+
+    query = f"""
+        SELECT s.*
+        FROM students s
+        WHERE {' AND '.join(where)}
+        ORDER BY s.current_year, s.register_number
+    """
+    cursor.execute(query, tuple(params))
+    rows = cursor.fetchall()
     cursor.close()
-    
-    dept_groups = {}
-    for student in students:
-        dept = student['department']
-        if dept not in dept_groups:
-            dept_groups[dept] = []
-        dept_groups[dept].append(student)
-    
-    return dept_groups
+
+    by_year = {int(y): [] for y in years}
+    for r in rows:
+        by_year[int(r["current_year"])].append(r)
+    return by_year
 
 def fetch_students_by_year_excluding(conn, year, exclude_date=None, exclude_time_slot=None):
     """Fetch students for a specific year grouped by department, excluding those already allocated on a given date/time"""
@@ -843,34 +861,60 @@ def fetch_students_by_year_excluding(conn, year, exclude_date=None, exclude_time
 
     return dept_groups
 
-def alternate_departments(dept_groups, dept_pair, total_seats):
-    """Alternate between two departments in round-robin fashion"""
-    dept1, dept2 = dept_pair
-    queue1 = dept_groups.get(dept1, []).copy()
-    queue2 = dept_groups.get(dept2, []).copy()
-    
-    result = []
-    use_first = True
-    
-    for i in range(total_seats):
-        if use_first:
-            if queue1:
-                result.append(queue1.pop(0))
-            elif queue2:
-                result.append(queue2.pop(0))
-            else:
-                break
-        else:
-            if queue2:
-                result.append(queue2.pop(0))
-            elif queue1:
-                result.append(queue1.pop(0))
-            else:
-                break
-        
-        use_first = not use_first
-    
-    return result
+def choose_columns_to_use(total_rows, remaining_students):
+    """
+    Choose which columns (A–I) to use in a hall when remaining_students < capacity.
+    - Always uses fixed column set A–I, but may skip some columns to avoid sparse middle columns.
+    - Prefer skipping 'buffer' middle columns B, E, H first.
+    - Ensures enough seats: len(cols_used) * total_rows >= remaining_students.
+    Returns: list of columns to use, in left-to-right order.
+    """
+    columns = HALL_COLUMNS.copy()
+    capacity = total_rows * len(columns)
+    if remaining_students >= capacity:
+        return columns
+
+    needed_cols = (remaining_students + total_rows - 1) // total_rows  # ceil
+    needed_cols = max(1, min(9, needed_cols))
+
+    # Preferred skip order: middle columns first, then near-middle to keep spread even
+    skip_preference = ['B', 'E', 'H', 'D', 'F', 'C', 'G', 'A', 'I']
+
+    cols_used = set(columns)
+    # remove until we have exactly needed_cols
+    to_remove = len(columns) - needed_cols
+    for c in skip_preference:
+        if to_remove <= 0:
+            break
+        if c in cols_used:
+            cols_used.remove(c)
+            to_remove -= 1
+
+    # keep original order
+    return [c for c in columns if c in cols_used]
+
+
+def pick_year_for_seat(by_year_queues, forbidden_year=None):
+    """
+    Pick next year to seat, trying to avoid forbidden_year.
+    Greedy: pick year with most remaining students, excluding forbidden if possible.
+    Returns year int or None.
+    """
+    candidates = []
+    for y, q in by_year_queues.items():
+        if q:
+            candidates.append((len(q), y))
+    if not candidates:
+        return None
+
+    # try best excluding forbidden
+    candidates.sort(reverse=True)
+    for _, y in candidates:
+        if forbidden_year is None or y != forbidden_year:
+            return y
+
+    # if only forbidden available
+    return candidates[0][1]
 
 # ==================== AUTOMATIC INVIGILATOR ASSIGNMENT ====================
 
@@ -932,135 +976,115 @@ def assign_invigilator_auto(hall_id, session_id):
 
 # ==================== SEATING ALLOCATION ====================
 
-@app.route('/admin/generate_seating/<int:session_id>',methods=['GET', 'POST'])
+@app.route('/admin/generate_seating/<int:session_id>', methods=['GET', 'POST'])
 @login_required('admin')
 def generate_seating(session_id):
+    """
+    Updated seating algorithm:
+    - Columns A–I fixed, but NOT tied to specific years.
+    - Primary constraint: avoid same-year adjacency within the same row across adjacent columns.
+    - Avoid allocating the same student twice in the same exam session.
+    - If remaining students don't fill a hall, automatically choose columns to skip (prefer B, E, H).
+    """
     conn = get_db()
     cursor = conn.cursor()
-    
-    # Get session details (include date and years)
+
     cursor.execute("SELECT * FROM exam_sessions WHERE id = %s", (session_id,))
     exam_session = cursor.fetchone()
-    
     if not exam_session:
         conn.close()
         flash('Session not found', 'danger')
         return redirect(url_for('admin_dashboard'))
-    
+
     hall_id = exam_session['hall_id']
     cursor.execute("SELECT total_rows FROM halls WHERE id = %s", (hall_id,))
     hall = cursor.fetchone()
-    total_rows = hall['total_rows']
-    
-    # Clear existing allocations
+    total_rows = int(hall['total_rows']) if hall else 0
+
+    # Clear existing allocations for this session/hall
     cursor.execute("DELETE FROM allocations WHERE session_id = %s", (session_id,))
     cursor.execute("DELETE FROM allocated_invigilator WHERE session_id = %s", (session_id,))
-    
-    # Generate seating
-    total_allocated = 0
-    columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']
 
-    # Parse selected years for this session
     years_csv = exam_session.get('years') or ''
-    selected_years = set()
     try:
-        selected_years = set(int(y) for y in years_csv.split(',') if y)
+        selected_years = sorted({int(y) for y in years_csv.split(',') if y.strip()})
     except Exception:
-        selected_years = set()
+        selected_years = []
+
+    if not selected_years:
+        conn.commit()
+        conn.close()
+        flash('No years selected for this session', 'danger')
+        return redirect(url_for('admin_dashboard'))
 
     session_date = exam_session.get('session_date')
     session_time_slot = exam_session.get('time_slot')
 
-    # If not all four years are included, reserve columns B, E and H as buffers
-    # For other columns whose mapped year is missing, fallback to selected years
-    buffer_columns = {'B', 'E', 'H'}
-    selected_years_list = sorted(list(selected_years)) if selected_years else []
-    fallback_idx = 0
+    # Load all eligible students grouped by year (excluding same date/time allocations and this session allocations)
+    by_year = fetch_available_students_by_year(
+        conn,
+        selected_years,
+        exclude_date=session_date,
+        exclude_time_slot=session_time_slot,
+        session_id=session_id,
+    )
 
-    for col in columns:
-        # drop buffer columns when a year is missing to reduce malpractice risk
-        if len(selected_years) < 4 and col in buffer_columns:
-            continue
+    total_remaining = sum(len(q) for q in by_year.values())
+    if total_remaining == 0:
+        conn.commit()
+        invigilator, message = assign_invigilator_auto(hall_id, session_id)
+        conn.close()
+        flash(f'No eligible students available to allocate. {message}', 'warning')
+        return redirect(url_for('admin_dashboard'))
 
-        mapped_year = COLUMN_YEAR_MAP[col]
-        dept_pair = COLUMN_DEPT_PAIR[col]
-        dept1, dept2 = dept_pair
+    # Column selection (auto-skip for partial usage)
+    columns_to_use = choose_columns_to_use(total_rows, total_remaining)
 
-        # Determine effective year to allocate into this column
-        effective_year = None
-        pre_fetched_dept_groups = None
+    # Seat filling order: by rows, left-to-right columns.
+    # Enforce "no same-year adjacency in same row" against previous placed seat in that row.
+    total_allocated = 0
+    prev_year_in_row = {r: None for r in range(1, total_rows + 1)}
 
-        if mapped_year in selected_years:
-            effective_year = mapped_year
-        else:
-            # If no years selected at all, nothing to do
-            if not selected_years_list:
-                continue
+    for r in range(1, total_rows + 1):
+        for c in columns_to_use:
+            # If no students left, stop completely
+            if total_remaining <= 0:
+                break
 
-            # Prefer a selected year where both departments have students
-            best_candidate = None
-            best_score = -1
-            best_groups = None
+            forbidden = prev_year_in_row[r]
+            y = pick_year_for_seat(by_year, forbidden_year=forbidden)
+            if y is None:
+                break
 
-            for cand in selected_years_list:
-                cand_groups = fetch_students_by_year_excluding(conn, cand, exclude_date=session_date, exclude_time_slot=session_time_slot)
-                c1 = len(cand_groups.get(dept1, []))
-                c2 = len(cand_groups.get(dept2, []))
-
-                # immediate preference if both departments present
-                if c1 > 0 and c2 > 0:
-                    best_candidate = cand
-                    best_groups = cand_groups
-                    best_score = c1 + c2
-                    break
-
-                # otherwise prefer the candidate with most relevant students
-                if (c1 + c2) > best_score:
-                    best_candidate = cand
-                    best_groups = cand_groups
-                    best_score = (c1 + c2)
-
-            if best_candidate and best_score > 0:
-                effective_year = best_candidate
-                pre_fetched_dept_groups = best_groups
-            else:
-                # fallback round-robin if none have students in these departments
-                effective_year = selected_years_list[fallback_idx % len(selected_years_list)]
-                fallback_idx += 1
-
-        # Fetch students for the effective year (reuse pre-fetched if available)
-        if pre_fetched_dept_groups is not None:
-            dept_groups = pre_fetched_dept_groups
-        else:
-            dept_groups = fetch_students_by_year_excluding(conn, effective_year, exclude_date=session_date, exclude_time_slot=session_time_slot)
-
-        column_students = alternate_departments(dept_groups, dept_pair, total_rows)
-
-        for row_idx, student in enumerate(column_students, start=1):
-            cursor.execute("""
-                INSERT INTO allocations 
+            student = by_year[y].pop(0)
+            cursor.execute(
+                """
+                INSERT INTO allocations
                 (student_id, session_id, hall_id, `row_number`, `column_name`)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (student['id'], session_id, hall_id, row_idx, col))
+                """,
+                (student['id'], session_id, hall_id, r, c),
+            )
+
             total_allocated += 1
-    # Commit seating inserts BEFORE assigning invigilator to avoid lock waits
+            total_remaining -= 1
+            prev_year_in_row[r] = y
+
+        if total_remaining <= 0:
+            break
+
     conn.commit()
 
-    # AUTOMATIC INVIGILATOR ASSIGNMENT
     invigilator, message = assign_invigilator_auto(hall_id, session_id)
-
     conn.close()
-    
-    # inform about buffer columns if not all years were present
-    extra_note = ''
-    if len(selected_years) < 4:
-        extra_note = ' Columns B, E and H left empty due to missing year.'
 
+    skipped = [col for col in HALL_COLUMNS if col not in columns_to_use]
+    skipped_note = f" Skipped columns: {', '.join(skipped)}." if skipped else ""
     if invigilator:
-        flash(f'Seating generated for {total_allocated} students. {message}{extra_note}', 'success')
+        flash(f'Seating generated for {total_allocated} students. {message}.{skipped_note}', 'success')
     else:
-        flash(f'Seating generated but {message}{extra_note}', 'warning')
-    
+        flash(f'Seating generated for {total_allocated} students but {message}.{skipped_note}', 'warning')
+
     return redirect(url_for('admin_dashboard'))
 
 # ==================== STUDENT ROUTES ====================
