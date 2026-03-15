@@ -43,6 +43,22 @@
 
 <div class="row">
     <div class="col-md-12">
+        <!-- Unavailable Invigilator Notifications -->
+        {% if unavailable_invigilators %}
+        <div class="alert alert-warning alert-dismissible fade show alert-invigilator-warning" role="alert">
+            <h6 class="alert-heading">⚠️ Invigilator Availability Alerts</h6>
+            <div class="row">
+                {% for inv in unavailable_invigilators %}
+                <div class="col-md-6 mb-2">
+                    <strong>{{ inv.name }} ({{ inv.staff_id }})</strong> marked Unavailable for 
+                    Session {{ inv.session_id }} on {{ inv.session_date }} ({{ inv.time_slot }}) in {{ inv.hall_name }}
+                </div>
+                {% endfor %}
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        {% endif %}
+        
         <div class="card">
             <div class="card-header d-flex justify-content-between">
                 <h5>Recent Exam Sessions</h5>

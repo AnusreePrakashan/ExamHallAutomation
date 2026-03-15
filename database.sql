@@ -78,6 +78,18 @@ CREATE TABLE allocated_invigilator (
     UNIQUE KEY unique_invigilator_session (session_id, hall_id)
 );
 
+-- Invigilator Session Availability Table (session-specific availability)
+CREATE TABLE invigilator_session_availability (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    invigilator_id INT NOT NULL,
+    session_id INT NOT NULL,
+    status ENUM('Available', 'Unavailable') DEFAULT 'Available',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (invigilator_id) REFERENCES invigilators(id),
+    FOREIGN KEY (session_id) REFERENCES exam_sessions(id),
+    UNIQUE KEY unique_invigilator_session (invigilator_id, session_id)
+);
+
 -- Admin Table (for login)
 CREATE TABLE admins (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -85,5 +97,16 @@ CREATE TABLE admins (
     password VARCHAR(100) NOT NULL
 );
 
+-- Create the new invigilator_session_availability table
+CREATE TABLE invigilator_session_availability (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    invigilator_id INT NOT NULL,
+    session_id INT NOT NULL,
+    status ENUM('Available', 'Unavailable') DEFAULT 'Available',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (invigilator_id) REFERENCES invigilators(id),
+    FOREIGN KEY (session_id) REFERENCES exam_sessions(id),
+    UNIQUE KEY unique_invigilator_session (invigilator_id, session_id)
+);
 -- Insert default admin
 INSERT INTO admins (username, password) VALUES ('admin', 'admin123');

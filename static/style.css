@@ -12,6 +12,54 @@ body {
     color: #333;
 }
 
+/* ==================== SESSION AVAILABILITY STYLES ==================== */
+
+.session-availability-select {
+    min-width: 120px;
+    font-size: 0.875rem;
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.5rem;
+    transition: all 0.2s ease-in-out;
+}
+
+.session-availability-select:focus {
+    border-color: #86b7fe;
+    outline: 0;
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+.session-availability-select option[value="Available"] {
+    color: #198754;
+    font-weight: 500;
+}
+
+.session-availability-select option[value="Unavailable"] {
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.availability-badge-available {
+    background-color: #198754 !important;
+    color: white !important;
+}
+
+.availability-badge-unavailable {
+    background-color: #dc3545 !important;
+    color: white !important;
+}
+
+.alert-invigilator-warning {
+    border-left: 4px solid #ffc107;
+    background-color: #fff3cd;
+    border-color: #ffc107;
+}
+
+.alert-invigilator-warning .alert-heading {
+    color: #856404;
+    font-weight: 600;
+}
+
 /* ==================== SIDEBAR ==================== */
 
 .sidebar {

@@ -68,9 +68,10 @@
                                     <thead>
                                         <tr>
                                             <th>Hall</th>
+                                            <th>Date</th>
                                             <th>Session</th>
                                             <th>Time</th>
-                                            <th>Class</th>
+                                            <th>Session Availability</th>
                                             <th>Assigned Date</th>
                                         </tr>
                                     </thead>
@@ -78,11 +79,25 @@
                                         {% for duty in duties %}
                                         <tr>
                                             <td>{{ duty.hall_name }}</td>
+                                            <td>{{ duty.session_date.strftime('%d-%m-%Y') if duty.session_date else 'N/A' }}</td>
                                             <td>
                                                 <span class="badge bg-info">{{ duty.session_type }}</span>
                                             </td>
                                             <td>{{ duty.time_slot }}</td>
-                                            <td>{{ duty.department }} Year {{ duty.year }}</td>
+                                            <td>
+                                                <form method="POST" action="{{ url_for('update_session_availability') }}" class="d-inline">
+                                                    <input type="hidden" name="session_id" value="{{ duty.session_id }}">
+                                                    <select name="status" class="form-select form-select-sm session-availability-select" onchange="this.form.submit()">
+                                                        <option value="Available" {{ 'selected' if duty.session_availability == 'Available' }}>Available</option>
+                                                        <option value="Unavailable" {{ 'selected' if duty.session_availability == 'Unavailable' }}>Unavailable</option>
+                                                    </select>
+                                                </form>
+                                                <small class="text-muted d-block mt-1">
+                                                    <span class="badge {{ 'availability-badge-available' if duty.session_availability == 'Available' else 'availability-badge-unavailable' }}">
+                                                        {{ duty.session_availability }}
+                                                    </span>
+                                                </small>
+                                            </td>
                                             <td>{{ duty.assigned_date.strftime('%d-%m-%Y') }}</td>
                                         </tr>
                                         {% endfor %}

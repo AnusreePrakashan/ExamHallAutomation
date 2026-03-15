@@ -96,6 +96,18 @@ def admin_dashboard():
     """)
     recent_sessions = cursor.fetchall()
     
+    # Get unavailable invigilator notifications
+    cursor.execute("""
+        SELECT i.name, i.staff_id, es.session_date, es.time_slot, es.id as session_id, h.hall_name
+        FROM invigilator_session_availability isa
+        JOIN invigilators i ON isa.invigilator_id = i.id
+        JOIN exam_sessions es ON isa.session_id = es.id
+        JOIN halls h ON es.hall_id = h.id
+        WHERE isa.status = 'Unavailable'
+        ORDER BY es.session_date DESC, es.time_slot DESC
+    """)
+    unavailable_invigilators = cursor.fetchall()
+    
     conn.close()
     
     return render_template('admin_dashboard.html', 
@@ -103,9 +115,10 @@ def admin_dashboard():
                          hall_count=hall_count,
                          invigilator_count=invigilator_count,
                          session_count=session_count,
-                         recent_sessions=recent_sessions)
+                         recent_sessions=recent_sessions,
+                         unavailable_invigilators=unavailable_invigilators)
 
-# ==================== ADMIN STUDENT MANAGEMENT ====================
+# ==================== ADMIN STUDENT MANAGEMENT ============
 
 @app.route('/admin/add_student', methods=['GET', 'POST'])
 @login_required('admin')
@@ -410,6 +423,9 @@ def create_multi_hall_session():
         hall_ids = [int(h) for h in hall_ids]
         years = sorted({int(y) for y in years_selected})
 
+        # Detect if this is a single-year session
+        is_single_year = len(years) == 1
+
         time_slot = '9:30 AM - 11:00 AM' if session_type == 'FN' else '2:30 PM - 4:00 PM'
         years_csv = ','.join(str(y) for y in years)
 
@@ -466,20 +482,40 @@ def create_multi_hall_session():
             hall = cursor.fetchone()
             total_rows = int(hall['total_rows']) if hall else 0
 
-            columns_to_use = choose_columns_to_use(total_rows, remaining)
+            # Use new column selection logic with single-year detection
+            columns_to_use = choose_columns_to_use(total_rows, remaining, is_single_year)
             prev_year_in_row = {r: None for r in range(1, total_rows + 1)}
 
             for r in range(1, total_rows + 1):
+                previous_year_in_row = None  # Reset for each new row
+                
                 for c in columns_to_use:
                     if remaining <= 0:
                         break
 
-                    forbidden = prev_year_in_row[r]
-                    y = pick_year_for_seat(by_year, forbidden_year=forbidden)
-                    if y is None:
+                    # RULE: Students from same academic year must NOT be placed in adjacent columns
+                    # Track the year placed in the previous column and avoid selecting that same year
+                    selected_year = None
+                    
+                    # Get all available years with students
+                    available_years = [year for year, queue in by_year.items() if queue]
+                    
+                    if not available_years:
                         break
-
-                    student = by_year[y].pop(0)
+                    
+                    # Remove previous year from available options if it exists
+                    if previous_year_in_row is not None and previous_year_in_row in available_years:
+                        available_years.remove(previous_year_in_row)
+                    
+                    # If no years available after removing previous year, allow it back (edge case)
+                    if not available_years:
+                        available_years = [year for year, queue in by_year.items() if queue]
+                    
+                    # Pick year with most remaining students from available years
+                    selected_year = max(available_years, key=lambda y: len(by_year[y]))
+                    
+                    # Assign student from selected year
+                    student = by_year[selected_year].pop(0)
                     cursor.execute(
                         """
                         INSERT INTO allocations
@@ -490,7 +526,8 @@ def create_multi_hall_session():
                     )
                     total_allocated += 1
                     remaining -= 1
-                    prev_year_in_row[r] = y
+                    prev_year_in_row[r] = selected_year
+                    previous_year_in_row = selected_year  # Update for next column
 
                 if remaining <= 0:
                     break
@@ -861,37 +898,79 @@ def fetch_students_by_year_excluding(conn, year, exclude_date=None, exclude_time
 
     return dept_groups
 
-def choose_columns_to_use(total_rows, remaining_students):
+def choose_columns_to_use(total_rows, remaining_students, is_single_year=False):
     """
     Choose which columns (A–I) to use in a hall when remaining_students < capacity.
-    - Always uses fixed column set A–I, but may skip some columns to avoid sparse middle columns.
-    - Prefer skipping 'buffer' middle columns B, E, H first.
-    - Ensures enough seats: len(cols_used) * total_rows >= remaining_students.
+    
+    EDGE CASE: ONLY ONE YEAR OF STUDENTS EXISTS
+    If only one academic year exists, skip middle columns B, E, H to maximize spacing.
+    
+    RULE 2 - CAPACITY CALCULATION:
+    Calculate usable seats without middle columns (B, E, H)
+    IF students <= usable_seats_without_middle_columns:
+        skip B,E,H
+    ELSE:
+        use all columns
+    
     Returns: list of columns to use, in left-to-right order.
     """
     columns = HALL_COLUMNS.copy()
     capacity = total_rows * len(columns)
+    
     if remaining_students >= capacity:
         return columns
+    
+    if is_single_year:
+        # Single-year session: apply middle column avoidance
+        middle_columns = ['B', 'E', 'H']
+        preferred_columns = ['A', 'C', 'D', 'F', 'G', 'I']
+        
+        # Calculate capacity without middle columns
+        usable_capacity = total_rows * len(preferred_columns)
+        
+        if remaining_students <= usable_capacity:
+            # Use only preferred columns (avoid middle columns)
+            needed_cols = (remaining_students + total_rows - 1) // total_rows  # ceil
+            needed_cols = max(1, min(len(preferred_columns), needed_cols))
+            return preferred_columns[:needed_cols]
+        else:
+            # Need middle columns too, use all columns
+            needed_cols = (remaining_students + total_rows - 1) // total_rows  # ceil
+            needed_cols = max(1, min(len(columns), needed_cols))
+            
+            # Use all columns but may skip some if not needed
+            skip_preference = ['B', 'E', 'H', 'D', 'F', 'C', 'G', 'A', 'I']
+            cols_used = set(columns)
+            to_remove = len(columns) - needed_cols
+            
+            for c in skip_preference:
+                if to_remove <= 0:
+                    break
+                if c in cols_used:
+                    cols_used.remove(c)
+                    to_remove -= 1
+            
+            return [c for c in columns if c in cols_used]
+    else:
+        # Multi-year session: use original logic
+        needed_cols = (remaining_students + total_rows - 1) // total_rows  # ceil
+        needed_cols = max(1, min(9, needed_cols))
+        
+        # Preferred skip order: middle columns first, then near-middle to keep spread even
+        skip_preference = ['B', 'E', 'H', 'D', 'F', 'C', 'G', 'A', 'I']
+        
+        cols_used = set(columns)
+        # remove until we have exactly needed_cols
+        to_remove = len(columns) - needed_cols
+        for c in skip_preference:
+            if to_remove <= 0:
+                break
+            if c in cols_used:
+                cols_used.remove(c)
+                to_remove -= 1
 
-    needed_cols = (remaining_students + total_rows - 1) // total_rows  # ceil
-    needed_cols = max(1, min(9, needed_cols))
-
-    # Preferred skip order: middle columns first, then near-middle to keep spread even
-    skip_preference = ['B', 'E', 'H', 'D', 'F', 'C', 'G', 'A', 'I']
-
-    cols_used = set(columns)
-    # remove until we have exactly needed_cols
-    to_remove = len(columns) - needed_cols
-    for c in skip_preference:
-        if to_remove <= 0:
-            break
-        if c in cols_used:
-            cols_used.remove(c)
-            to_remove -= 1
-
-    # keep original order
-    return [c for c in columns if c in cols_used]
+        # keep original order
+        return [c for c in columns if c in cols_used]
 
 
 def pick_year_for_seat(by_year_queues, forbidden_year=None):
@@ -918,44 +997,91 @@ def pick_year_for_seat(by_year_queues, forbidden_year=None):
 
 # ==================== AUTOMATIC INVIGILATOR ASSIGNMENT ====================
 
-def get_least_workload_invigilator():
-    """Fetch available invigilator with least workload"""
+def get_least_workload_invigilator(session_id=None):
+    """Fetch available invigilator with least workload, respecting session-specific availability"""
     conn = get_db()
     cursor = conn.cursor()
-    # Treat NULL or differently-cased values as available, using COALESCE and LOWER
-    cursor.execute("""
-        SELECT i.id, i.name, i.department, COUNT(ai.id) as workload
-        FROM invigilators i
-        LEFT JOIN allocated_invigilator ai ON i.id = ai.invigilator_id
-        WHERE LOWER(COALESCE(i.availability, 'Available')) = 'available'
-        GROUP BY i.id
-        ORDER BY workload ASC, i.id ASC
-        LIMIT 1
-    """)
-
-    invigilator = cursor.fetchone()
-
-    # If none explicitly available, fall back to any invigilator with least workload
-    if not invigilator:
+    
+    if session_id:
+        # First try to find invigilators available for this specific session
         cursor.execute("""
             SELECT i.id, i.name, i.department, COUNT(ai.id) as workload
             FROM invigilators i
             LEFT JOIN allocated_invigilator ai ON i.id = ai.invigilator_id
+            LEFT JOIN invigilator_session_availability isa ON i.id = isa.invigilator_id AND isa.session_id = %s
+            WHERE LOWER(COALESCE(i.availability, 'Available')) = 'available'
+            AND (isa.status IS NULL OR isa.status = 'Available')
+            GROUP BY i.id
+            ORDER BY workload ASC, i.id ASC
+            LIMIT 1
+        """, (session_id,))
+        
+        invigilator = cursor.fetchone()
+        
+        # If no session-specific available invigilator, fall back to generally available
+        if not invigilator:
+            cursor.execute("""
+                SELECT i.id, i.name, i.department, COUNT(ai.id) as workload
+                FROM invigilators i
+                LEFT JOIN allocated_invigilator ai ON i.id = ai.invigilator_id
+                WHERE LOWER(COALESCE(i.availability, 'Available')) = 'available'
+                AND i.id NOT IN (
+                    SELECT invigilator_id FROM invigilator_session_availability 
+                    WHERE session_id = %s AND status = 'Unavailable'
+                )
+                GROUP BY i.id
+                ORDER BY workload ASC, i.id ASC
+                LIMIT 1
+            """, (session_id,))
+            invigilator = cursor.fetchone()
+    else:
+        # Original logic for backward compatibility
+        cursor.execute("""
+            SELECT i.id, i.name, i.department, COUNT(ai.id) as workload
+            FROM invigilators i
+            LEFT JOIN allocated_invigilator ai ON i.id = ai.invigilator_id
+            WHERE LOWER(COALESCE(i.availability, 'Available')) = 'available'
             GROUP BY i.id
             ORDER BY workload ASC, i.id ASC
             LIMIT 1
         """)
         invigilator = cursor.fetchone()
 
+    # If none explicitly available, fall back to any invigilator with least workload
+    if not invigilator:
+        if session_id:
+            cursor.execute("""
+                SELECT i.id, i.name, i.department, COUNT(ai.id) as workload
+                FROM invigilators i
+                LEFT JOIN allocated_invigilator ai ON i.id = ai.invigilator_id
+                WHERE i.id NOT IN (
+                    SELECT invigilator_id FROM invigilator_session_availability 
+                    WHERE session_id = %s AND status = 'Unavailable'
+                )
+                GROUP BY i.id
+                ORDER BY workload ASC, i.id ASC
+                LIMIT 1
+            """, (session_id,))
+        else:
+            cursor.execute("""
+                SELECT i.id, i.name, i.department, COUNT(ai.id) as workload
+                FROM invigilators i
+                LEFT JOIN allocated_invigilator ai ON i.id = ai.invigilator_id
+                GROUP BY i.id
+                ORDER BY workload ASC, i.id ASC
+                LIMIT 1
+            """)
+        invigilator = cursor.fetchone()
+
     conn.close()
     return invigilator
 
 def assign_invigilator_auto(hall_id, session_id):
-    """Automatically assign invigilator with least workload"""
-    invigilator = get_least_workload_invigilator()
+    """Automatically assign invigilator with least workload, respecting session-specific availability"""
+    invigilator = get_least_workload_invigilator(session_id)
     
     if not invigilator:
-        return None, "No available invigilators found"
+        return None, "No available invigilators found for this session"
     
     conn = get_db()
     cursor = conn.cursor()
@@ -1017,6 +1143,9 @@ def generate_seating(session_id):
         flash('No years selected for this session', 'danger')
         return redirect(url_for('admin_dashboard'))
 
+    # Detect if this is a single-year session
+    is_single_year = len(selected_years) == 1
+
     session_date = exam_session.get('session_date')
     session_time_slot = exam_session.get('time_slot')
 
@@ -1037,26 +1166,45 @@ def generate_seating(session_id):
         flash(f'No eligible students available to allocate. {message}', 'warning')
         return redirect(url_for('admin_dashboard'))
 
-    # Column selection (auto-skip for partial usage)
-    columns_to_use = choose_columns_to_use(total_rows, total_remaining)
+    # Column selection with single-year middle column avoidance
+    columns_to_use = choose_columns_to_use(total_rows, total_remaining, is_single_year)
 
     # Seat filling order: by rows, left-to-right columns.
-    # Enforce "no same-year adjacency in same row" against previous placed seat in that row.
+    # ENFORCE: No same-year adjacency between columns in the same row
     total_allocated = 0
     prev_year_in_row = {r: None for r in range(1, total_rows + 1)}
 
     for r in range(1, total_rows + 1):
+        previous_year_in_row = None  # Reset for each new row
+        
         for c in columns_to_use:
             # If no students left, stop completely
             if total_remaining <= 0:
                 break
 
-            forbidden = prev_year_in_row[r]
-            y = pick_year_for_seat(by_year, forbidden_year=forbidden)
-            if y is None:
+            # RULE: Students from same academic year must NOT be placed in adjacent columns
+            # Track the year placed in the previous column and avoid selecting that same year
+            selected_year = None
+            
+            # Get all available years with students
+            available_years = [year for year, queue in by_year.items() if queue]
+            
+            if not available_years:
                 break
-
-            student = by_year[y].pop(0)
+            
+            # Remove previous year from available options if it exists
+            if previous_year_in_row is not None and previous_year_in_row in available_years:
+                available_years.remove(previous_year_in_row)
+            
+            # If no years available after removing previous year, allow it back (edge case)
+            if not available_years:
+                available_years = [year for year, queue in by_year.items() if queue]
+            
+            # Pick year with most remaining students from available years
+            selected_year = max(available_years, key=lambda y: len(by_year[y]))
+            
+            # Assign student from selected year
+            student = by_year[selected_year].pop(0)
             cursor.execute(
                 """
                 INSERT INTO allocations
@@ -1068,7 +1216,8 @@ def generate_seating(session_id):
 
             total_allocated += 1
             total_remaining -= 1
-            prev_year_in_row[r] = y
+            prev_year_in_row[r] = selected_year
+            previous_year_in_row = selected_year  # Update for next column
 
         if total_remaining <= 0:
             break
@@ -1175,15 +1324,18 @@ def invigilator_dashboard():
     cursor.execute("SELECT * FROM invigilators WHERE id = %s", (session['user_id'],))
     invigilator = cursor.fetchone()
     
-    # Get assigned duties with workload count
+    # Get assigned duties with workload count and session-specific availability
     cursor.execute("""
-        SELECT ai.*, h.hall_name, es.session_type, es.time_slot,
-               NULL AS department, NULL AS year
+        SELECT ai.*, h.hall_name, es.session_type, es.time_slot, es.session_date,
+               COALESCE(isa.status, 'Available') as session_availability,
+               es.id as session_id
         FROM allocated_invigilator ai
         JOIN halls h ON ai.hall_id = h.id
         JOIN exam_sessions es ON ai.session_id = es.id
+        LEFT JOIN invigilator_session_availability isa ON ai.session_id = isa.session_id 
+                                                            AND ai.invigilator_id = isa.invigilator_id
         WHERE ai.invigilator_id = %s
-        ORDER BY ai.assigned_date DESC
+        ORDER BY es.session_date DESC, es.time_slot DESC
     """, (session['user_id'],))
     duties = cursor.fetchall()
     
@@ -1210,6 +1362,45 @@ def update_availability():
     conn.close()
     
     flash(f'Availability updated to {availability}', 'success')
+    return redirect(url_for('invigilator_dashboard'))
+
+@app.route('/invigilator/update_session_availability', methods=['POST'])
+@login_required('invigilator')
+def update_session_availability():
+    session_id = int(request.form['session_id'])
+    status = request.form['status']
+    invigilator_id = session['user_id']
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Check if record exists
+    cursor.execute("""
+        SELECT id FROM invigilator_session_availability 
+        WHERE invigilator_id = %s AND session_id = %s
+    """, (invigilator_id, session_id))
+    
+    existing = cursor.fetchone()
+    
+    if existing:
+        # Update existing record
+        cursor.execute("""
+            UPDATE invigilator_session_availability 
+            SET status = %s 
+            WHERE invigilator_id = %s AND session_id = %s
+        """, (status, invigilator_id, session_id))
+    else:
+        # Insert new record
+        cursor.execute("""
+            INSERT INTO invigilator_session_availability 
+            (invigilator_id, session_id, status)
+            VALUES (%s, %s, %s)
+        """, (invigilator_id, session_id, status))
+    
+    conn.commit()
+    conn.close()
+    
+    flash(f'Session availability updated to {status}', 'success')
     return redirect(url_for('invigilator_dashboard'))
 
 # ==================== LOGOUT ====================
